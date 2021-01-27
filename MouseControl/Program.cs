@@ -52,7 +52,14 @@ namespace MouseControl
 
         public static void Main(string[] args)
         {
-            InitProcess();
+            if (args.Count() <= 0)
+            {
+                InitProcess();
+            }
+            else
+            {
+                InitTask();
+            }
         }
 
         private static void InitProcess()
@@ -72,11 +79,23 @@ namespace MouseControl
             timer1.Enabled = true;
             timer1.Elapsed += new ElapsedEventHandler(timer1_Tick);
 
-            Console.WriteLine("按任意键退出");
-            Console.ReadKey();
+            while (true)
+            { 
+                
+            }
+        }
+
+        private static void InitTask()
+        {
+            TickJog();
         }
 
         private static void timer1_Tick(object source, ElapsedEventArgs e)
+        {
+            TickJog();
+        }
+
+        public static void TickJog()
         {
             GetCursorPos(out p);
             var currentP = Process.GetCurrentProcess();
