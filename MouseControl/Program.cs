@@ -11,12 +11,33 @@ namespace MouseControl
 {
     public class Program
     {
+        #region 参数
+        private static int millSeconds = 500;
         private static Timer timer1 = new Timer();
         private static int interval = 120;
         private static int SW_SHOWNOMAL = 1;
         private static Point p;
         private const int MaxLastActivePopupIterations = 50;
         delegate bool EnumWindowsProc(IntPtr hWnd, int lParam);
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct RECT
+        {
+            public int Left;
+            public int Top;
+            public int Right;
+            public int Bottom;
+        }
+
+        const int MOUSEEVENTF_MOVE = 0x1;
+        const int MOUSEEVENTF_LEFTDOWN = 0x2;
+        const int MOUSEEVENTF_LEFTUP = 0x4;
+        const int MOUSEEVENTF_RIGHTDOWN = 0x8;
+        const int MOUSEEVENTF_RIGHTUP = 0x10;
+        const int MOUSEEVENTF_MIDDLEDOWN = 0x20;
+        const int MOUSEEVENTF_MIDDLEUP = 0x40;
+        const int MOUSEEVENTF_WHEEL = 0x800;
+        const int MOUSEEVENTF_ABSOLUTE = 0x8000;
 
         public enum GetAncestorFlags
         {
@@ -33,7 +54,9 @@ namespace MouseControl
             "SysShadow",
             "Button"
         };
+        #endregion
 
+        #region DLLs
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr GetWindow(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll")]
@@ -53,56 +76,33 @@ namespace MouseControl
         static extern bool GetWindowRect(IntPtr hWnd, ref RECT lpRect);
         [DllImport("user32.dll")]
         static extern bool EnumWindows(EnumWindowsProc enumFunc, int lParam);
-
         [DllImport("user32.dll")]
         static extern bool IsWindowVisible(IntPtr hWnd);
-
         [DllImport("user32.dll")]
         static extern IntPtr GetShellWindow();
-
         [DllImport("user32.dll", ExactSpelling = true)]
         static extern IntPtr GetAncestor(IntPtr hwnd, GetAncestorFlags flags);
-
         [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
-
         [DllImport("user32.dll")]
         static extern IntPtr GetLastActivePopup(IntPtr hWnd);
+        #endregion
 
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct RECT
-        {
-            public int Left;                            
-            public int Top;                             
-            public int Right;                           
-            public int Bottom;                        
-        }
-
-        const int MOUSEEVENTF_MOVE = 0x1;
-        const int MOUSEEVENTF_LEFTDOWN = 0x2;
-        const int MOUSEEVENTF_LEFTUP = 0x4;
-        const int MOUSEEVENTF_RIGHTDOWN = 0x8;
-        const int MOUSEEVENTF_RIGHTUP = 0x10;
-        const int MOUSEEVENTF_MIDDLEDOWN = 0x20;
-        const int MOUSEEVENTF_MIDDLEUP = 0x40;
-        const int MOUSEEVENTF_WHEEL = 0x800;
-        const int MOUSEEVENTF_ABSOLUTE = 0x8000;
-
-
+        #region 方法
         public static void Main(string[] args)
         {
             if (args.Count() <= 0)
             {
-                InitProcess();
+                ForeverRun();
             }
             else
             {
-                InitTask();
+                int.TryParse(args[0], out millSeconds);
+                TaskSchadular();
             }
         }
 
-        private static void InitProcess()
+        private static void ForeverRun()
         {
             Console.WriteLine("输入间隔时间（单位秒），默认2分钟");
             var count = Console.ReadLine();
@@ -120,38 +120,43 @@ namespace MouseControl
             timer1.Elapsed += new ElapsedEventHandler(timer1_Tick);
 
             while (true)
-            { 
-                
+            {
+
             }
         }
 
-        private static void InitTask()
+        private static void TaskSchadular()
         {
-            TickJog();
+            TickJob();
         }
 
         private static void timer1_Tick(object source, ElapsedEventArgs e)
         {
-            TickJog();
+            TickJob();
         }
 
-        public static void TickJog()
+        private static void TickJob()
         {
             GetCursorPos(out p);
+            //MouseControl
             var currentP = Process.GetCurrentProcess();
-            var process = GetCurrentProcess();
+            //远程桌面进程
+            var remoteProcess = GetCurrentRemoteProcess();
 
-            foreach (var p in process)
+            foreach (var p in remoteProcess)
             {
                 HandleRunningInstance(p);
                 var tempP = GetCurrentPosition();
 
+                //设置鼠标位置
                 mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, (tempP.X + 500) * 65536 / 1920, (tempP.Y + 500) * 65536 / 1080, 0, 0);
+                //鼠标右键点击
                 mouse_event(MOUSEEVENTF_RIGHTDOWN | MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
 
-                System.Threading.Thread.Sleep(150);
+                System.Threading.Thread.Sleep(millSeconds);
             }
 
+            //打开MouseControl前的进程
             var jumpP = GetBeforeClickPorcess(currentP);
 
             if (jumpP != null)
@@ -192,30 +197,9 @@ namespace MouseControl
             return null;
         }
 
-        private static List<Process> GetCurrentProcess()
+        private static List<Process> GetCurrentRemoteProcess()
         {
-            Process[] procs = Process.GetProcessesByName("mstsc");
-            bool hasWindow = true;
-
-            if (procs.Length <= 0)
-                return new List<Process>();
-
-            foreach (Process proc in procs)
-            {
-                if (proc.MainWindowHandle == IntPtr.Zero)
-                {
-                    hasWindow = false;
-                }
-            }
-
-            if (hasWindow)
-            {
-                return procs.ToList();
-            }
-            else
-            {
-                return new List<Process>();
-            }
+            return Process.GetProcessesByName("mstsc").Where(x => x.MainWindowHandle != IntPtr.Zero).ToList();
         }
 
         private static void HandleRunningInstance(Process instance)
@@ -241,61 +225,69 @@ namespace MouseControl
             };
         }
 
-        private static bool EligibleForActivation(Process p, IntPtr lShellWindow)
-        {
-            IntPtr hWnd = p.MainWindowHandle;
-
-            if (hWnd == lShellWindow)
-                return false;
-
-            var root = GetAncestor(hWnd, GetAncestorFlags.GetRootOwner);
-
-            if (GetLastVisibleActivePopUpOfWindow(root) != hWnd)
-                return false;
-
-            var classNameStringBuilder = new StringBuilder(256);
-            var length = GetClassName(hWnd, classNameStringBuilder, classNameStringBuilder.Capacity);
-            if (length == 0)
-                return false;
-
-            var className = classNameStringBuilder.ToString();
-
-            if (Array.IndexOf(WindowsClassNamesToSkip, className) > -1)
-                return false;
-
-            if (className.StartsWith("WMP9MediaBarFlyout")) //WMP's "now playing" taskbar-toolbar
-                return false;
-
-            return true;
-        }
-
-        private static IntPtr GetLastVisibleActivePopUpOfWindow(IntPtr window)
-        {
-            var level = MaxLastActivePopupIterations;
-            var currentWindow = window;
-            while (level-- > 0)
-            {
-                var lastPopUp = GetLastActivePopup(currentWindow);
-
-                if (IsWindowVisible(lastPopUp))
-                    return lastPopUp;
-
-                if (lastPopUp == currentWindow)
-                    return IntPtr.Zero;
-
-                currentWindow = lastPopUp;
-            }
-
-            return IntPtr.Zero;
-        }
-
-        public static int GetZOrder(Process p)
+        private static int GetZOrder(Process p)
         {
             IntPtr hWnd = p.MainWindowHandle;
             var z = 0;
+
             // 3 is GetWindowType.GW_HWNDPREV
-            for (var h = hWnd; h != IntPtr.Zero; h = GetWindow(h, 3)) z++;
+            for (var h = hWnd; h != IntPtr.Zero; h = GetWindow(h, 3))
+            {
+                z++;
+            }
+
             return z;
         }
+
+        //获取Window alt+tab中显示的进程
+
+        //private static bool EligibleForActivation(Process p, IntPtr lShellWindow)
+        //{
+        //    IntPtr hWnd = p.MainWindowHandle;
+
+        //    if (hWnd == lShellWindow)
+        //        return false;
+
+        //    var root = GetAncestor(hWnd, GetAncestorFlags.GetRootOwner);
+
+        //    if (GetLastVisibleActivePopUpOfWindow(root) != hWnd)
+        //        return false;
+
+        //    var classNameStringBuilder = new StringBuilder(256);
+        //    var length = GetClassName(hWnd, classNameStringBuilder, classNameStringBuilder.Capacity);
+        //    if (length == 0)
+        //        return false;
+
+        //    var className = classNameStringBuilder.ToString();
+
+        //    if (Array.IndexOf(WindowsClassNamesToSkip, className) > -1)
+        //        return false;
+
+        //    if (className.StartsWith("WMP9MediaBarFlyout")) //WMP's "now playing" taskbar-toolbar
+        //        return false;
+
+        //    return true;
+        //}
+
+        //private static IntPtr GetLastVisibleActivePopUpOfWindow(IntPtr window)
+        //{
+        //    var level = MaxLastActivePopupIterations;
+        //    var currentWindow = window;
+        //    while (level-- > 0)
+        //    {
+        //        var lastPopUp = GetLastActivePopup(currentWindow);
+
+        //        if (IsWindowVisible(lastPopUp))
+        //            return lastPopUp;
+
+        //        if (lastPopUp == currentWindow)
+        //            return IntPtr.Zero;
+
+        //        currentWindow = lastPopUp;
+        //    }
+
+        //    return IntPtr.Zero;
+        //}
+        #endregion
     }
 }
