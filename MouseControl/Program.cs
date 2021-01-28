@@ -149,7 +149,7 @@ namespace MouseControl
                 mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, (tempP.X + 500) * 65536 / 1920, (tempP.Y + 500) * 65536 / 1080, 0, 0);
                 mouse_event(MOUSEEVENTF_RIGHTDOWN | MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0);
 
-                System.Threading.Thread.Sleep(500);
+                System.Threading.Thread.Sleep(200);
             }
 
             var jumpP = GetBeforeClickPorcess(currentP);
