@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Timers;
 
 namespace MouseControl
@@ -14,7 +15,27 @@ namespace MouseControl
         private static int interval = 120;
         private static int SW_SHOWNOMAL = 1;
         private static Point p;
+        private const int MaxLastActivePopupIterations = 50;
+        delegate bool EnumWindowsProc(IntPtr hWnd, int lParam);
 
+        public enum GetAncestorFlags
+        {
+            GetParent = 1,
+            GetRoot = 2,
+            GetRootOwner = 3
+        }
+
+        private static readonly string[] WindowsClassNamesToSkip =
+       {
+            "Shell_TrayWnd",
+            "DV2ControlHost",
+            "MsgrIMEWindowClass",
+            "SysShadow",
+            "Button"
+        };
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr GetWindow(IntPtr hWnd, int nIndex);
         [DllImport("user32.dll")]
         public static extern bool GetCursorPos(out Point pt);
         [DllImport("User32.dll")]
@@ -25,10 +46,29 @@ namespace MouseControl
         static extern void mouse_event(int flags, int dX, int dY, int buttons, int extraInfo);
         [DllImport("user32.dll", CharSet = CharSet.Auto, ExactSpelling = true)]
         public static extern IntPtr GetForegroundWindow();
-
+        [DllImport("user32.dll")]
+        static extern int GetWindowText(IntPtr hWnd, StringBuilder text, int count);
         [DllImport("user32.dll")]
         [return: MarshalAs(UnmanagedType.Bool)]
         static extern bool GetWindowRect(IntPtr hWnd, ref RECT lpRect);
+        [DllImport("user32.dll")]
+        static extern bool EnumWindows(EnumWindowsProc enumFunc, int lParam);
+
+        [DllImport("user32.dll")]
+        static extern bool IsWindowVisible(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetShellWindow();
+
+        [DllImport("user32.dll", ExactSpelling = true)]
+        static extern IntPtr GetAncestor(IntPtr hwnd, GetAncestorFlags flags);
+
+        [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
+
+        [DllImport("user32.dll")]
+        static extern IntPtr GetLastActivePopup(IntPtr hWnd);
+
 
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT
@@ -112,8 +152,44 @@ namespace MouseControl
                 System.Threading.Thread.Sleep(500);
             }
 
-            SetForegroundWindow(currentP.MainWindowHandle);
-            mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, (p.X) * 65536 / 1920, (p.Y) * 65536 / 1080, 0, 0);
+            var jumpP = GetBeforeClickPorcess(currentP);
+
+            if (jumpP != null)
+            {
+                //ShowWindowAsync(jumpP.MainWindowHandle, SW_SHOWNOMAL);
+                SetForegroundWindow(jumpP.MainWindowHandle);
+                //System.Threading.Thread.Sleep(500);
+                //mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, (p.X) * 65536 / 1920, (p.Y) * 65536 / 1080, 0, 0);
+            }
+        }
+
+        private static Process GetBeforeClickPorcess(Process p)
+        {
+            var lShellWindow = GetShellWindow();
+            Process[] processlist = Process.GetProcesses();
+
+            List<ValueTuple<int, Process>> pList = new List<ValueTuple<int, Process>>();
+
+            foreach (var pp in processlist)
+            {
+                if (IsWindowVisible(pp.MainWindowHandle) && pp.MainWindowHandle != lShellWindow)
+                {
+                    var order = GetZOrder(pp);
+                    pList.Add(new ValueTuple<int, Process>(order, pp));
+                }
+            }
+
+            pList = pList.OrderBy(x => x.Item1).ToList();
+
+            for (int i = 0; i < pList.Count; i++)
+            {
+                if (pList[i].Item2.ProcessName == p.ProcessName && i + 1 < pList.Count)
+                {
+                    return pList[i + 1].Item2;
+                }
+            }
+
+            return null;
         }
 
         private static List<Process> GetCurrentProcess()
@@ -122,7 +198,7 @@ namespace MouseControl
             bool hasWindow = true;
 
             if (procs.Length <= 0)
-                return null;
+                return new List<Process>();
 
             foreach (Process proc in procs)
             {
@@ -138,7 +214,7 @@ namespace MouseControl
             }
             else
             {
-                return null;
+                return new List<Process>();
             }
         }
 
@@ -163,6 +239,63 @@ namespace MouseControl
                 X = x,
                 Y = y
             };
+        }
+
+        private static bool EligibleForActivation(Process p, IntPtr lShellWindow)
+        {
+            IntPtr hWnd = p.MainWindowHandle;
+
+            if (hWnd == lShellWindow)
+                return false;
+
+            var root = GetAncestor(hWnd, GetAncestorFlags.GetRootOwner);
+
+            if (GetLastVisibleActivePopUpOfWindow(root) != hWnd)
+                return false;
+
+            var classNameStringBuilder = new StringBuilder(256);
+            var length = GetClassName(hWnd, classNameStringBuilder, classNameStringBuilder.Capacity);
+            if (length == 0)
+                return false;
+
+            var className = classNameStringBuilder.ToString();
+
+            if (Array.IndexOf(WindowsClassNamesToSkip, className) > -1)
+                return false;
+
+            if (className.StartsWith("WMP9MediaBarFlyout")) //WMP's "now playing" taskbar-toolbar
+                return false;
+
+            return true;
+        }
+
+        private static IntPtr GetLastVisibleActivePopUpOfWindow(IntPtr window)
+        {
+            var level = MaxLastActivePopupIterations;
+            var currentWindow = window;
+            while (level-- > 0)
+            {
+                var lastPopUp = GetLastActivePopup(currentWindow);
+
+                if (IsWindowVisible(lastPopUp))
+                    return lastPopUp;
+
+                if (lastPopUp == currentWindow)
+                    return IntPtr.Zero;
+
+                currentWindow = lastPopUp;
+            }
+
+            return IntPtr.Zero;
+        }
+
+        public static int GetZOrder(Process p)
+        {
+            IntPtr hWnd = p.MainWindowHandle;
+            var z = 0;
+            // 3 is GetWindowType.GW_HWNDPREV
+            for (var h = hWnd; h != IntPtr.Zero; h = GetWindow(h, 3)) z++;
+            return z;
         }
     }
 }
