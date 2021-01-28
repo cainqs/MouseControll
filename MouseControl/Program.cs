@@ -163,7 +163,7 @@ namespace MouseControl
             {
                 //ShowWindowAsync(jumpP.MainWindowHandle, SW_SHOWNOMAL);
                 SetForegroundWindow(jumpP.MainWindowHandle);
-                System.Threading.Thread.Sleep(millSeconds);
+                //System.Threading.Thread.Sleep(millSeconds);
                 mouse_event(MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_MOVE, (p.X) * 65536 / 1920, (p.Y) * 65536 / 1080, 0, 0);
             }
         }
